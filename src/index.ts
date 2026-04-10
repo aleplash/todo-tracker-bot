@@ -31,6 +31,7 @@ async function main() {
     { command: "projects", description: "Список активных проектов" },
     { command: "settings", description: "Настройка времени дайджеста" },
     { command: "digest", description: "Дайджест задач на сегодня" },
+    { command: "add_task", description: "Добавить задачи вручную" },
   ]);
   console.log("🤖 Bot starting...");
   await bot.start();

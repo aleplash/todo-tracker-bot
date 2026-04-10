@@ -95,10 +95,50 @@ flowHandlers.callbackQuery(/^select_project:(.+)$/, async (ctx) => {
   }
 });
 
+// ─── Manual Project Selection ───
+
+flowHandlers.callbackQuery(/^manual_project:(.+)$/, async (ctx) => {
+  const projectId = ctx.match![1];
+  ctx.session.manualTaskProjectId = projectId;
+  await ctx.answerCallbackQuery();
+  await ctx.editMessageText(
+    "✏️ Отправьте задачи в формате:\n\n" +
+    "@Ответственный: описание задачи DDL ДД.ММ.ГГГГ\n" +
+    "@Ответственный: описание задачи DDL ДД.ММ.ГГГГ\n\n" +
+    "Или в любом текстовом формате — я извлеку задачи автоматически."
+  );
+});
+
 // ─── 3. MoM Text Edits ───
 
 flowHandlers.on("message:text", async (ctx) => {
   const telegramId = BigInt(ctx.from!.id);
+
+  // Handle manual task entry
+  if (ctx.session.manualTaskProjectId) {
+    const projectId = ctx.session.manualTaskProjectId;
+    ctx.session.manualTaskProjectId = null;
+
+    const { getProjectById } = await import("../../db");
+    const project = await getProjectById(projectId);
+    if (!project) {
+      await ctx.reply("❌ Проект не найден.");
+      return;
+    }
+
+    await ctx.reply("⏳ Извлекаю задачи...");
+
+    try {
+      const tasks = await extractTasksFromMom(ctx.message.text);
+      const count = await exportTasksToSheet(project.spreadsheetId, tasks);
+      await ctx.reply(`✅ ${count} задач(и) успешно добавлены в таблицу проекта "${project.projectName}".`);
+    } catch (error) {
+      console.error("Manual task error:", error);
+      await ctx.reply("❌ Не удалось извлечь задачи. Проверьте формат и попробуйте ещё раз.");
+    }
+    return;
+  }
+
   const session = await getActiveSession(telegramId);
   if (!session) return;
 

@@ -7,6 +7,7 @@ import {
   updateNotifyTime,
 } from "../../db";
 import { extractSpreadsheetId, validateSheetAccess, getTodayTasks } from "../../services/sheets";
+import { projectSelectKeyboardManual } from "../keyboards";
 
 export const commandHandlers = new Composer<BotContext>();
 
@@ -87,6 +88,21 @@ commandHandlers.command("digest", async (ctx) => {
   }
 
   await ctx.reply(msg, { parse_mode: "Markdown" });
+});
+// ─── /add_task ───
+
+commandHandlers.command("add_task", async (ctx) => {
+  const telegramId = BigInt(ctx.from!.id);
+  const projects = await getUserProjects(telegramId);
+
+  if (projects.length === 0) {
+    await ctx.reply("У вас нет проектов. Добавьте через /add_project");
+    return;
+  }
+
+  await ctx.reply("📁 Выберите проект для добавления задач:", {
+    reply_markup: projectSelectKeyboardManual(projects),
+  });
 });
 // ─── /settings ───
 // ─── /projects ───

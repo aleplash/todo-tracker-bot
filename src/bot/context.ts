@@ -9,6 +9,8 @@ export interface SessionData {
   pdfBuffer: number[] | null;
   /** Original PDF file name (used for MoM title) */
   pdfFileName: string | null;
+/** Project ID selected for manual task entry */
+  manualTaskProjectId: string | null;
 }
 
 export type BotContext = Context & SessionFlavor<SessionData>;
@@ -19,5 +21,6 @@ export function initialSession(): SessionData {
     awaitingNotifyTime: false,
     pdfBuffer: null,
     pdfFileName: null,
+    manualTaskProjectId: null,
   };
 }
