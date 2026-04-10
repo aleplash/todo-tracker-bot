@@ -98,7 +98,7 @@ async function callClaude(systemPrompt: string, userMessage: string): Promise<st
         throw new Error(`Claude API error ${response.status}: ${errorBody}`);
       }
 
-      const data = await response.json();
+      const data: any = await response.json();
       const textBlock = data?.content?.find((b: any) => b.type === "text");
       return textBlock?.text ?? "";
     } catch (error) {
