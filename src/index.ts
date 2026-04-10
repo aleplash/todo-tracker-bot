@@ -4,30 +4,27 @@ import { type BotContext, initialSession } from "./bot/context";
 import { commandHandlers } from "./bot/handlers/commands";
 import { flowHandlers } from "./bot/handlers/flow";
 import { startDigestJob } from "./jobs/digest";
+import { createServer } from "http";
 
 async function main() {
   const bot = new Bot<BotContext>(config.telegramBotToken);
 
-  // Session middleware (in-memory, resets on restart)
-  bot.use(
-    session({
-      initial: initialSession,
-    })
-  );
-
-  // Register handlers (order matters: commands first, then flow)
+  bot.use(session({ initial: initialSession }));
   bot.use(commandHandlers);
   bot.use(flowHandlers);
+  bot.catch((err) => console.error("Bot error:", err));
 
-  // Error handler
-  bot.catch((err) => {
-    console.error("Bot error:", err);
-  });
-
-  // Start digest cron
   startDigestJob(bot);
 
-  // Launch
+  // Dummy HTTP server for Render health checks
+  const port = process.env.PORT || 3000;
+  createServer((_, res) => {
+    res.writeHead(200);
+    res.end("OK");
+  }).listen(port, () => {
+    console.log(`Health check server on port ${port}`);
+  });
+
   console.log("🤖 Bot starting...");
   await bot.start();
 }
