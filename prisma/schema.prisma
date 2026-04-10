@@ -1,0 +1,45 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id         String    @id @default(uuid()) @db.Uuid
+  telegramId BigInt    @unique @map("telegram_id")
+  notifyTime String    @default("11:00") @map("notify_time") // HH:MM format
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+
+  projects Project[]
+  sessions Session[]
+
+  @@map("users")
+}
+
+model Project {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @map("user_id") @db.Uuid
+  projectName   String   @map("project_name")
+  spreadsheetId String   @map("spreadsheet_id") // extracted from Google Sheets URL
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessions Session[]
+
+  @@map("projects")
+}
+
+model Session {
+  id        String @id @default(uuid()) @db.Uuid
+  userId    String @map("user_id") @db.Uuid
+  projectId String @map("project_id") @db.Uuid
+  momDraft  String @map("mom_draft") @db.Text
+  status    String @default("pending_review") // pending_review | approved | exported
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
