@@ -12,6 +12,6 @@ export const config = {
   anthropicApiKey: required("ANTHROPIC_API_KEY"),
   google: {
     serviceAccountEmail: required("GOOGLE_SERVICE_ACCOUNT_EMAIL"),
-    privateKey: required("GOOGLE_PRIVATE_KEY").replace(/\\n/g, "\n"),
+    privateKey: Buffer.from(required("GOOGLE_PRIVATE_KEY_BASE64"), "base64").toString("utf-8"),
   },
 } as const;
