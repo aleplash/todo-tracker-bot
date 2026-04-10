@@ -6,7 +6,7 @@ import {
   addProject,
   updateNotifyTime,
 } from "../../db";
-import { extractSpreadsheetId, validateSheetAccess } from "../../services/sheets";
+import { extractSpreadsheetId, validateSheetAccess, getTodayTasks } from "../../services/sheets";
 
 export const commandHandlers = new Composer<BotContext>();
 
@@ -44,7 +44,50 @@ commandHandlers.command("add_project", async (ctx) => {
     { parse_mode: "Markdown" }
   );
 });
+// ─── /digest ───
 
+commandHandlers.command("digest", async (ctx) => {
+  const telegramId = BigInt(ctx.from!.id);
+  const projects = await getUserProjects(telegramId);
+
+  if (projects.length === 0) {
+    await ctx.reply("У вас нет проектов. Добавьте через /add_project");
+    return;
+  }
+
+  await ctx.reply("⏳ Собираю дайджест...");
+
+  const allTasks: { project: string; tasks: any[] }[] = [];
+
+  for (const project of projects) {
+    try {
+      const tasks = await getTodayTasks(project.spreadsheetId);
+      if (tasks.length > 0) {
+        allTasks.push({ project: project.projectName, tasks });
+      }
+    } catch (error) {
+      console.error(`Digest error for project ${project.projectName}:`, error);
+    }
+  }
+
+  if (allTasks.length === 0) {
+    await ctx.reply("✅ Нет задач на сегодня и просроченных задач!");
+    return;
+  }
+
+  let msg = "🔔 *Дайджест задач на сегодня:*\n\n";
+
+  for (const { project, tasks } of allTasks) {
+    msg += `📁 *${project}*\n`;
+    for (const t of tasks) {
+      const prefix = t.isOverdue ? "🔴 ПРОСРОЧЕНО: " : "• ";
+      msg += `  ${prefix}${t.task} — 👤 ${t.assignee} (DDL: ${t.deadline})\n`;
+    }
+    msg += "\n";
+  }
+
+  await ctx.reply(msg, { parse_mode: "Markdown" });
+});
 // ─── /settings ───
 // ─── /projects ───
 
