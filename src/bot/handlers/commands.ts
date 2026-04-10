@@ -46,7 +46,25 @@ commandHandlers.command("add_project", async (ctx) => {
 });
 
 // ─── /settings ───
+// ─── /projects ───
 
+commandHandlers.command("projects", async (ctx) => {
+  const telegramId = BigInt(ctx.from!.id);
+  const projects = await getUserProjects(telegramId);
+
+  if (projects.length === 0) {
+    await ctx.reply("У вас нет проектов. Добавьте через /add_project");
+    return;
+  }
+
+  let msg = "📁 *Ваши проекты:*\n\n";
+  projects.forEach((p, i) => {
+    const link = `https://docs.google.com/spreadsheets/d/${p.spreadsheetId}/edit`;
+    msg += `${i + 1}. *${p.projectName}*\n   🔗 [Открыть таблицу](${link})\n\n`;
+  });
+
+  await ctx.reply(msg, { parse_mode: "Markdown" });
+});
 commandHandlers.command("settings", async (ctx) => {
   ctx.session.awaitingNotifyTime = true;
   const telegramId = BigInt(ctx.from!.id);

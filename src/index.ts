@@ -24,7 +24,13 @@ async function main() {
   }).listen(port, () => {
     console.log(`Health check server on port ${port}`);
   });
-
+// Set bot commands menu
+  await bot.api.setMyCommands([
+    { command: "start", description: "Начать работу с ботом" },
+    { command: "add_project", description: "Добавить новый проект" },
+    { command: "projects", description: "Список активных проектов" },
+    { command: "settings", description: "Настройка времени дайджеста" },
+  ]);
   console.log("🤖 Bot starting...");
   await bot.start();
 }
