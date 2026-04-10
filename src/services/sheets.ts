@@ -108,6 +108,7 @@ export interface OverdueTask {
   task: string;
   assignee: string;
   deadline: string;
+  isOverdue: boolean;
 }
 
 /**
@@ -144,13 +145,19 @@ export async function getTodayTasks(
           status === "TRUE" ||
           status === "Выполнено";
         console.log(`[Digest] Row: "${row[0]}" | deadline raw="${rawDeadline}" normalized="${deadline}" | status="${status}" isDone=${isDone} | match=${deadline === today && !isDone}`);
-        return deadline === today && !isDone;
+        return !isDone && (deadline === today || isOverdue(deadline, today));
       })
-      .map((row) => ({
-        task: row[0] ?? "",
-        assignee: row[1] ?? "Не назначен",
-        deadline: row[2] ?? "",
-      }));
+      .map((row) => {
+        const rawDeadline = row[2]?.trim() ?? "";
+        const deadline = normalizeDate(rawDeadline);
+        const today = normalizeDate(formatToday());
+        return {
+          task: row[0] ?? "",
+          assignee: row[1] ?? "Не назначен",
+          deadline: row[2] ?? "",
+          isOverdue: isOverdue(deadline, today),
+        };
+      });
   } catch (error: any) {
     console.error("[Digest] Error reading sheet:", error);
     if (error?.code === 403 || error?.status === 403) {
@@ -197,6 +204,17 @@ function normalizeDate(raw: string): string {
 /**
  * Returns today's date in DD.MM.YYYY format.
  */
+/**
+ * Checks if a deadline is in the past (overdue).
+ */
+function isOverdue(deadline: string, today: string): boolean {
+  if (!deadline) return false;
+  const [dd, mm, yyyy] = deadline.split(".").map(Number);
+  const [td, tm, ty] = today.split(".").map(Number);
+  const deadlineDate = new Date(yyyy, mm - 1, dd);
+  const todayDate = new Date(ty, tm - 1, td);
+  return deadlineDate < todayDate;
+}
 function formatToday(): string {
   const now = new Date();
   const d = String(now.getDate()).padStart(2, "0");
