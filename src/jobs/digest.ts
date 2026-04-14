@@ -53,9 +53,12 @@ export function startDigestJob(bot: Bot<BotContext>) {
         }
 
         try {
-          await bot.api.sendMessage(Number(user.telegramId), msg, {
-            parse_mode: "Markdown",
-          });
+          const chunks = splitMessage(msg, 4000);
+          for (const chunk of chunks) {
+            await bot.api.sendMessage(Number(user.telegramId), chunk, {
+              parse_mode: "Markdown",
+            });
+          }
         } catch (error) {
           console.error(
             `Failed to send digest to ${user.telegramId}:`,
@@ -69,4 +72,17 @@ export function startDigestJob(bot: Bot<BotContext>) {
   });
 
   console.log("📅 Digest cron job started.");
+}
+function splitMessage(text: string, maxLength: number): string[] {
+  if (text.length <= maxLength) return [text];
+  const chunks: string[] = [];
+  let current = text;
+  while (current.length > maxLength) {
+    let splitAt = current.lastIndexOf("\n", maxLength);
+    if (splitAt === -1) splitAt = maxLength;
+    chunks.push(current.slice(0, splitAt));
+    current = current.slice(splitAt);
+  }
+  if (current.trim()) chunks.push(current);
+  return chunks;
 }

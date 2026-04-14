@@ -87,8 +87,10 @@ commandHandlers.command("digest", async (ctx) => {
     msg += "\n";
   }
 
-  await ctx.reply(msg, { parse_mode: "Markdown" });
-});
+  const chunks = splitMessage(msg, 4000);
+  for (const chunk of chunks) {
+    await ctx.reply(chunk, { parse_mode: "Markdown" });
+  }
 // ─── /add_task ───
 
 commandHandlers.command("add_task", async (ctx) => {
@@ -202,4 +204,19 @@ commandHandlers.on("message:text", async (ctx, next) => {
 
   // Not a command flow — pass to next handler (MoM edits)
   await next();
+  }
 });
+
+function splitMessage(text: string, maxLength: number): string[] {
+  if (text.length <= maxLength) return [text];
+  const chunks: string[] = [];
+  let current = text;
+  while (current.length > maxLength) {
+    let splitAt = current.lastIndexOf("\n", maxLength);
+    if (splitAt === -1) splitAt = maxLength;
+    chunks.push(current.slice(0, splitAt));
+    current = current.slice(splitAt);
+  }
+  if (current.trim()) chunks.push(current);
+  return chunks;
+  }
