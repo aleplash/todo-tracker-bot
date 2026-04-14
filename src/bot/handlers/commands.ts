@@ -45,6 +45,7 @@ commandHandlers.command("add_project", async (ctx) => {
     { parse_mode: "Markdown" }
   );
 });
+
 // ─── /digest ───
 
 commandHandlers.command("digest", async (ctx) => {
@@ -91,6 +92,8 @@ commandHandlers.command("digest", async (ctx) => {
   for (const chunk of chunks) {
     await ctx.reply(chunk, { parse_mode: "Markdown" });
   }
+});
+
 // ─── /add_task ───
 
 commandHandlers.command("add_task", async (ctx) => {
@@ -106,7 +109,7 @@ commandHandlers.command("add_task", async (ctx) => {
     reply_markup: projectSelectKeyboardManual(projects),
   });
 });
-// ─── /settings ───
+
 // ─── /projects ───
 
 commandHandlers.command("projects", async (ctx) => {
@@ -126,6 +129,9 @@ commandHandlers.command("projects", async (ctx) => {
 
   await ctx.reply(msg, { parse_mode: "Markdown" });
 });
+
+// ─── /settings ───
+
 commandHandlers.command("settings", async (ctx) => {
   ctx.session.awaitingNotifyTime = true;
   const telegramId = BigInt(ctx.from!.id);
@@ -204,7 +210,6 @@ commandHandlers.on("message:text", async (ctx, next) => {
 
   // Not a command flow — pass to next handler (MoM edits)
   await next();
-  }
 });
 
 function splitMessage(text: string, maxLength: number): string[] {
@@ -219,4 +224,4 @@ function splitMessage(text: string, maxLength: number): string[] {
   }
   if (current.trim()) chunks.push(current);
   return chunks;
-  }
+}
