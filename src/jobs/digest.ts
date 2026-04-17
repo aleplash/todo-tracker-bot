@@ -47,7 +47,7 @@ export function startDigestJob(bot: Bot<BotContext>) {
           msg += `📁 *${project}*\n`;
           for (const t of tasks) {
             const prefix = t.isOverdue ? "🔴 ПРОСРОЧЕНО: " : "• ";
-          msg += `  ${prefix}${t.task} — 👤 ${t.assignee} (DDL: ${t.deadline})\n`;
+          msg += `  ${prefix}${escapeMarkdown(t.task)} — 👤 ${escapeMarkdown(t.assignee)} (DDL:{t.deadline})\n`;
           }
           msg += "\n";
         }
@@ -85,4 +85,8 @@ function splitMessage(text: string, maxLength: number): string[] {
   }
   if (current.trim()) chunks.push(current);
   return chunks;
+}
+
+function escapeMarkdown(text: string): string {
+  return text.replace(/([*_`\[\]])/g, "\\$1");
 }

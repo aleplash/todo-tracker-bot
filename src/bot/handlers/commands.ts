@@ -83,7 +83,7 @@ commandHandlers.command("digest", async (ctx) => {
     msg += `📁 *${project}*\n`;
     for (const t of tasks) {
       const prefix = t.isOverdue ? "🔴 ПРОСРОЧЕНО: " : "• ";
-      msg += `  ${prefix}${t.task} — 👤 ${t.assignee} (DDL: ${t.deadline})\n`;
+      msg += `  ${prefix}${escapeMarkdown(t.task)} — 👤 ${escapeMarkdown(t.assignee)} (DDL: ${t.deadline})\n`;
     }
     msg += "\n";
   }
@@ -211,6 +211,10 @@ commandHandlers.on("message:text", async (ctx, next) => {
   // Not a command flow — pass to next handler (MoM edits)
   await next();
 });
+
+function escapeMarkdown(text: string): string {
+  return text.replace(/([*_`\[\]])/g, "\\$1");
+}
 
 function splitMessage(text: string, maxLength: number): string[] {
   if (text.length <= maxLength) return [text];
