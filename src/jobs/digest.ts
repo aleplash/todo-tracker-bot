@@ -9,7 +9,6 @@ import type { BotContext } from "../bot/context";
  * When current HH:MM matches, sends a digest of today's tasks.
  */
 export function startDigestJob(bot: Bot<BotContext>) {
-  // Runs every minute to match user-specific notify times
   cron.schedule("* * * * *", async () => {
     const now = new Date();
     const currentTime = `${String(now.getHours()).padStart(2, "0")}:${String(
@@ -46,8 +45,9 @@ export function startDigestJob(bot: Bot<BotContext>) {
         for (const { project, tasks } of allTasks) {
           msg += `📁 *${project}*\n`;
           for (const t of tasks) {
-          const prefix = t.isOverdue ? "🔴 ПРОСРОЧЕНО: " : "• ";
-          msg += `  ${prefix}${escapeMarkdown(t.task)} — 👤 ${escapeMarkdown(t.assignee)} (DDL: ${t.deadline})\n`;
+            const prefix = t.isOverdue ? "🔴 ПРОСРОЧЕНО: " : "• ";
+            msg += `  ${prefix}${escapeMarkdown(t.task)} — 👤 ${escapeMarkdown(t.assignee)} (DDL: ${t.deadline})\n`;
+          }
           msg += "\n";
         }
 
@@ -72,6 +72,7 @@ export function startDigestJob(bot: Bot<BotContext>) {
 
   console.log("📅 Digest cron job started.");
 }
+
 function splitMessage(text: string, maxLength: number): string[] {
   if (text.length <= maxLength) return [text];
   const chunks: string[] = [];
