@@ -46,9 +46,8 @@ export function startDigestJob(bot: Bot<BotContext>) {
         for (const { project, tasks } of allTasks) {
           msg += `📁 *${project}*\n`;
           for (const t of tasks) {
-            const prefix = t.isOverdue ? "🔴 ПРОСРОЧЕНО: " : "• ";
-          msg += `  ${prefix}${escapeMarkdown(t.task)} — 👤 ${escapeMarkdown(t.assignee)} (DDL:{t.deadline})\n`;
-          }
+          const prefix = t.isOverdue ? "🔴 ПРОСРОЧЕНО: " : "• ";
+          msg += `  ${prefix}${escapeMarkdown(t.task)} — 👤 ${escapeMarkdown(t.assignee)} (DDL: ${t.deadline})\n`;
           msg += "\n";
         }
 
