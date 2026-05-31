@@ -1,4 +1,5 @@
 import { Composer } from "grammy";
+import { invalidateClusters } from "../../services/person-resolver";
 import type { BotContext } from "../context";
 import {
   findOrCreateUser,
@@ -180,6 +181,7 @@ commandHandlers.on("message:text", async (ctx, next) => {
 
     const telegramId = BigInt(ctx.from!.id);
     await addProject(telegramId, name, spreadsheetId);
+    invalidateClusters(String(telegramId));
     await ctx.reply(`✅ Проект "${name}" успешно добавлен!`);
     return;
   }

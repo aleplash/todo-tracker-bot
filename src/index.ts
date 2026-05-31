@@ -2,6 +2,7 @@ import { Bot, session } from "grammy";
 import { config } from "./config";
 import { type BotContext, initialSession } from "./bot/context";
 import { commandHandlers } from "./bot/handlers/commands";
+import { tasksHandlers } from "./bot/handlers/tasks";
 import { flowHandlers } from "./bot/handlers/flow";
 import { startDigestJob } from "./jobs/digest";
 import { createServer } from "http";
@@ -11,6 +12,7 @@ async function main() {
 
   bot.use(session({ initial: initialSession }));
   bot.use(commandHandlers);
+  bot.use(tasksHandlers);
   bot.use(flowHandlers);
   bot.catch((err) => console.error("Bot error:", err));
 

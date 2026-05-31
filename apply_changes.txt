@@ -1,0 +1,650 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Применить все изменения. Запускать из КОРНЯ репозитория todo-tracker-bot.
+if [ ! -d src ]; then
+  echo "Нет папки src/. Запусти из корня репозитория: cd ~/Downloads/todo-tracker-bot"
+  exit 1
+fi
+
+echo "-> Пишу новые/заменяемые файлы..."
+mkdir -p src/services src/bot/handlers
+
+cat > src/services/people.ts <<'PEOPLE_EOF'
+// src/services/people.ts
+//
+// Строковые утилиты для сопоставления имён исполнителей.
+//
+// ВАЖНО: этот модуль НЕ пытается в одиночку угадать "Саша = Александр" —
+// уменьшительные и опечатки не выводятся из строки. За объединение вариантов
+// одного человека отвечает person-resolver.ts (разовая LLM-кластеризация +
+// кеш). Здесь — только нормализация, транслитерация и матчер с допуском на
+// падежные окончания, который используется для:
+//   1) сопоставления введённого запроса с вариантами уже собранного кластера;
+//   2) маппинга строки таблицы на кластер.
+
+// ─── (опционально) ручные override-алиасы ───
+// По умолчанию ПУСТО — реестр вести не нужно. Можно точечно дополнить
+// крайние случаи, которые LLM путает (например, чистая роль "Maxim (PM)").
+const MANUAL_ALIASES: Record<string, string[]> = {
+  // "Maxim Dubinin": ["Maxim (PM)"],
+};
+
+// ─── Транслитерация ───
+
+const CYRILLIC_TO_LATIN: Record<string, string> = {
+  а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "e", ж: "zh",
+  з: "z", и: "i", й: "i", к: "k", л: "l", м: "m", н: "n", о: "o",
+  п: "p", р: "r", с: "s", т: "t", у: "u", ф: "f", х: "h", ц: "c",
+  ч: "ch", ш: "sh", щ: "sch", ъ: "", ы: "y", ь: "", э: "e", ю: "yu", я: "ya",
+};
+
+function translit(s: string): string {
+  let out = "";
+  for (const ch of s.toLowerCase()) out += CYRILLIC_TO_LATIN[ch] ?? ch;
+  return out;
+}
+
+function canonToken(t: string): string {
+  let x = translit(t.toLowerCase());
+  x = x.replace(/[^a-z]/g, "");
+  x = x.replace(/ks/g, "x"); // "maksim" ≈ "maxim"
+  x = x.replace(/kh/g, "h"); // "Mikhail" ≈ "Михаил"
+  return x;
+}
+
+function tokenize(raw: string): string[] {
+  const cleaned = raw.replace(/\(.*?\)/g, " ").replace(/@/g, " ");
+  return cleaned
+    .split(/[\s,;/]+/)
+    .map(canonToken)
+    .filter((t) => t.length > 0);
+}
+
+// ─── Ручные алиасы (если заданы) ───
+
+function aliasCanonicalsFor(raw: string): string[] {
+  const norm = raw.trim().toLowerCase();
+  const out: string[] = [];
+  for (const [canon, aliases] of Object.entries(MANUAL_ALIASES)) {
+    if (canon.toLowerCase() === norm || aliases.some((a) => a.toLowerCase() === norm)) {
+      out.push(canon);
+    }
+  }
+  return out;
+}
+
+function tokenSets(raw: string): string[][] {
+  const sets = [tokenize(raw)];
+  for (const canon of aliasCanonicalsFor(raw)) sets.push(tokenize(canon));
+  return sets.filter((s) => s.length > 0);
+}
+
+// ─── Сравнение токенов с допуском на падежи ───
+
+function commonPrefix(a: string, b: string): number {
+  let i = 0;
+  const n = Math.min(a.length, b.length);
+  while (i < n && a[i] === b[i]) i++;
+  return i;
+}
+
+function tokenMatch(q: string, a: string): boolean {
+  if (q.length === 1) return a.startsWith(q); // инициал в запросе
+  if (a.length === 1) return q.startsWith(a); // инициал в таблице
+  if (a.startsWith(q) || q.startsWith(a)) return true; // префикс (max→maxim)
+  // Допуск на падежное окончание: "саша" vs "сашу", "иванова" vs "иванову".
+  const cp = commonPrefix(q, a);
+  const shorter = Math.min(q.length, a.length);
+  return cp >= 3 && cp >= shorter - 1;
+}
+
+/**
+ * Совпадает ли строка-исполнитель с введённым именем.
+ * Каждый токен запроса должен найти пару среди токенов исполнителя.
+ */
+export function matchesAssignee(assignee: string, query: string): boolean {
+  const qSets = tokenSets(query);
+  const aSets = tokenSets(assignee);
+  if (qSets.length === 0 || aSets.length === 0) return false;
+
+  for (const q of qSets) {
+    for (const a of aSets) {
+      if (q.every((qt) => a.some((at) => tokenMatch(qt, at)))) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Ключ для точного сопоставления "строка таблицы → кластер".
+ * Канонизирует и сортирует токены, чтобы порядок имя/фамилия не мешал.
+ */
+export function membershipKey(raw: string): string {
+  return tokenize(raw).slice().sort().join(" ");
+}
+
+PEOPLE_EOF
+
+cat > src/services/person-resolver.ts <<'RESOLVER_EOF'
+// src/services/person-resolver.ts
+//
+// Разовая кластеризация исполнителей через Claude + кеш.
+//
+// Зачем: уменьшительные ("Саша"→"Александр"), опечатки и разные транслиты
+// нельзя вывести из строки. Claude один раз группирует УНИКАЛЬНЫЕ строки
+// "Ответственный" (их десятки) в кластеры-людей. Результат кешируется и
+// пересобирается только при изменении набора строк. Запросы → дешёвый lookup.
+
+import { extractJsonFromClaude } from "./gemini";
+import { matchesAssignee, membershipKey } from "./people";
+
+export interface PersonCluster {
+  canonical: string; // "Александр Николаев"
+  variants: string[]; // сырые строки из таблиц, относящиеся к человеку
+}
+
+// ─── Кеш ───
+// In-memory. Для продакшена заменить на БД: таблица person_clusters
+// (workspace_id, signature text, clusters_json jsonb). Семантика та же:
+// если signature совпал — отдать сохранённые кластеры, иначе пересобрать.
+const cache = new Map<string, { signature: string; clusters: PersonCluster[] }>();
+
+function signatureOf(distinct: string[]): string {
+  return distinct.map((s) => s.trim().toLowerCase()).sort().join("|");
+}
+
+/**
+ * Возвращает кластеры людей для набора уникальных исполнителей.
+ * LLM вызывается только при изменении набора (cache-miss по signature).
+ */
+export async function getClusters(
+  workspaceKey: string,
+  distinctAssignees: string[]
+): Promise<PersonCluster[]> {
+  const clean = dedupe(distinctAssignees);
+  if (clean.length === 0) return [];
+
+  const sig = signatureOf(clean);
+  const hit = cache.get(workspaceKey);
+  if (hit && hit.signature === sig) return hit.clusters;
+
+  let clusters: PersonCluster[];
+  try {
+    clusters = await clusterWithClaude(clean);
+  } catch (error) {
+    console.error("[resolver] clustering failed, fallback to identity:", error);
+    // Фолбэк: каждая строка — отдельный человек. Матчер всё равно покроет
+    // регистр/транслит/падежи; потеряем только уменьшительные.
+    clusters = clean.map((v) => ({ canonical: v, variants: [v] }));
+  }
+
+  cache.set(workspaceKey, { signature: sig, clusters });
+  return clusters;
+}
+
+/** Сбрасывает кеш (например, после добавления проекта). */
+export function invalidateClusters(workspaceKey: string): void {
+  cache.delete(workspaceKey);
+}
+
+// ─── Поиск кластера по введённому имени ───
+
+/**
+ * Находит кластеры, подходящие под запрос. Возвращает массив:
+ *   []        — не найдено;
+ *   [c]       — однозначно;
+ *   [c1, c2]  — неоднозначно (например, два разных "Саши") → уточнить у юзера.
+ */
+export function findClusters(
+  clusters: PersonCluster[],
+  query: string
+): PersonCluster[] {
+  return clusters.filter(
+    (c) =>
+      matchesAssignee(c.canonical, query) ||
+      c.variants.some((v) => matchesAssignee(v, query))
+  );
+}
+
+/**
+ * Карта "ключ строки таблицы → каноничное имя".
+ * Строится из исходных строк, чтобы маппинг был точным даже если LLM слегка
+ * переписала вариант.
+ */
+export function buildMembershipMap(
+  clusters: PersonCluster[],
+  distinctAssignees: string[]
+): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const raw of dedupe(distinctAssignees)) {
+    const key = membershipKey(raw);
+    let canon = clusters.find((c) =>
+      c.variants.some((v) => membershipKey(v) === key)
+    )?.canonical;
+    if (!canon) {
+      canon = clusters.find(
+        (c) =>
+          matchesAssignee(c.canonical, raw) ||
+          c.variants.some((v) => matchesAssignee(v, raw))
+      )?.canonical;
+    }
+    if (canon) map.set(key, canon);
+  }
+  return map;
+}
+
+// ─── Внутреннее ───
+
+function dedupe(list: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const s of list) {
+    const v = (s ?? "").trim();
+    if (!v) continue;
+    const k = v.toLowerCase();
+    if (!seen.has(k)) {
+      seen.add(k);
+      out.push(v);
+    }
+  }
+  return out;
+}
+
+async function clusterWithClaude(distinct: string[]): Promise<PersonCluster[]> {
+  const prompt =
+    "Тебе дан список строк из колонки \"Ответственный\" рабочих таблиц. " +
+    "Сгруппируй строки, относящиеся к ОДНОМУ человеку. Учитывай:\n" +
+    "- уменьшительные/полные формы (Саша=Александр, Дима=Дмитрий, Ваня=Иван, Миша=Михаил);\n" +
+    "- транслитерацию (Максим=Maxim=Max), регистр, префикс @;\n" +
+    "- инициалы и роли в скобках (\"Maxim D.\", \"Maxim (PM)\");\n" +
+    "- падежи (\"Максима\", \"Сашу\").\n\n" +
+    "ПРАВИЛА:\n" +
+    "- НЕ объединяй явно разных людей. Если совпадает только имя без фамилии и " +
+    "однозначно определить нельзя — оставь отдельным кластером.\n" +
+    "- В variants клади строки СТРОГО как во входе, дословно.\n" +
+    "- canonical — наиболее полная/формальная форма из группы.\n" +
+    "- Ответ — СТРОГО JSON-массив без markdown:\n" +
+    '[{"canonical":"Имя Фамилия","variants":["...","..."]}]\n\n' +
+    "Входные строки:\n" +
+    distinct.map((s) => `- ${s}`).join("\n");
+
+  const result = await extractJsonFromClaude<PersonCluster[]>(prompt);
+  if (!Array.isArray(result)) return [];
+  return result.filter(
+    (c) => c && typeof c.canonical === "string" && Array.isArray(c.variants)
+  );
+}
+
+RESOLVER_EOF
+
+cat > src/bot/handlers/tasks.ts <<'TASKS_EOF'
+// src/bot/handlers/tasks.ts
+//
+// «Выписать все задачи на человека» по всем проектам — для любого исполнителя.
+// Плюс /people — показать, как бот сгруппировал имена (для проверки кластеризации).
+//
+// Триггеры:
+//   /tasks Александр Николаев
+//   "выпиши все задачи на Сашу Николаева"
+//   /people
+//
+// Регистрировать в index.ts МЕЖДУ commandHandlers и flowHandlers.
+
+import { Composer } from "grammy";
+import type { BotContext } from "../context";
+import { getUserProjects } from "../../db";
+import { getAllTasks, type PersonTask } from "../../services/sheets";
+import {
+  getClusters,
+  findClusters,
+  buildMembershipMap,
+  type PersonCluster,
+} from "../../services/person-resolver";
+import { membershipKey } from "../../services/people";
+
+export const tasksHandlers = new Composer<BotContext>();
+
+const NL_TRIGGER =
+  /^\s*(?:выпиши|покажи|собери|дай|список)?\s*(?:все\s+)?задачи\s+(?:на|по|для)\s+(.+)$/i;
+
+const MAX_MESSAGE = 3500;
+
+// ─── /tasks ───
+
+tasksHandlers.command("tasks", async (ctx) => {
+  const name = ctx.match?.trim();
+  if (!name) {
+    await ctx.reply("Использование: /tasks Имя Фамилия\nНапример: /tasks Александр Николаев");
+    return;
+  }
+  await runTasksQuery(ctx, name);
+});
+
+tasksHandlers.hears(NL_TRIGGER, async (ctx) => {
+  const name = ctx.match[1]?.trim();
+  if (name) await runTasksQuery(ctx, name);
+});
+
+// ─── /people — как бот сгруппировал имена ───
+
+tasksHandlers.command("people", async (ctx) => {
+  const telegramId = BigInt(ctx.from!.id);
+  const workspaceKey = String(telegramId);
+  const projects = await getUserProjects(telegramId);
+
+  if (projects.length === 0) {
+    await ctx.reply("У вас нет проектов. Добавьте через /add_project");
+    return;
+  }
+
+  await ctx.reply("⏳ Собираю список людей…");
+
+  const distinctAssignees = await collectAssignees(projects);
+  if (distinctAssignees.length === 0) {
+    await ctx.reply("В таблицах пока нет исполнителей.");
+    return;
+  }
+
+  const clusters = await getClusters(workspaceKey, distinctAssignees);
+  const sorted = [...clusters].sort((a, b) =>
+    a.canonical.localeCompare(b.canonical, "ru")
+  );
+
+  const blocks: string[] = [`👥 Распознано людей: ${sorted.length}\n`];
+  for (const c of sorted) {
+    const others = c.variants.filter(
+      (v) => v.trim().toLowerCase() !== c.canonical.trim().toLowerCase()
+    );
+    let block = `👤 ${c.canonical}`;
+    if (others.length > 0) block += `\n   варианты: ${others.join(", ")}`;
+    blocks.push(block + "\n");
+  }
+
+  for (const chunk of packBlocks(blocks)) await ctx.reply(chunk);
+});
+
+// ─── Основная логика /tasks ───
+
+async function runTasksQuery(ctx: BotContext, name: string): Promise<void> {
+  const telegramId = BigInt(ctx.from!.id);
+  const workspaceKey = String(telegramId);
+  const projects = await getUserProjects(telegramId);
+
+  if (projects.length === 0) {
+    await ctx.reply("У вас нет проектов. Добавьте через /add_project");
+    return;
+  }
+
+  await ctx.reply(`⏳ Ищу задачи: ${name}…`);
+
+  // 1. Читаем все строки всех проектов.
+  const perProject: { project: string; tasks: PersonTask[] }[] = [];
+  const distinctAssignees: string[] = [];
+
+  for (const project of projects) {
+    try {
+      const all = await getAllTasks(project.spreadsheetId);
+      perProject.push({ project: project.projectName, tasks: all });
+      for (const t of all) if (t.assignee.trim()) distinctAssignees.push(t.assignee);
+    } catch (error) {
+      console.error(`[tasks] project ${project.projectName}:`, error);
+    }
+  }
+
+  // 2. Кластеры людей (LLM один раз, дальше кеш).
+  const clusters = await getClusters(workspaceKey, distinctAssignees);
+
+  // 3. Резолвим запрос → кластер.
+  const matched = findClusters(clusters, name);
+
+  if (matched.length === 0) {
+    await ctx.reply(`Не нашёл человека по запросу «${name}».`);
+    return;
+  }
+  if (matched.length > 1) {
+    const list = matched.map((c, i) => `${i + 1}. ${c.canonical}`).join("\n");
+    await ctx.reply(
+      `Нашёл несколько подходящих людей:\n${list}\n\nУточните фамилию.`
+    );
+    return;
+  }
+
+  const target = matched[0];
+
+  // 4. Точная фильтрация по принадлежности строки кластеру.
+  const membership = buildMembershipMap(clusters, distinctAssignees);
+  const today = todayDMY();
+  const grouped: { project: string; tasks: PersonTask[] }[] = [];
+
+  for (const { project, tasks } of perProject) {
+    const mine = tasks.filter(
+      (t) => !t.done && membership.get(membershipKey(t.assignee)) === target.canonical
+    );
+    if (mine.length > 0) {
+      mine.sort((a, b) => sortKey(a) - sortKey(b));
+      grouped.push({ project, tasks: mine });
+    }
+  }
+
+  if (grouped.length === 0) {
+    await ctx.reply(`У «${target.canonical}» нет активных задач.`);
+    return;
+  }
+
+  const total = grouped.reduce((n, g) => n + g.tasks.length, 0);
+  for (const chunk of formatGrouped(target.canonical, total, grouped, today)) {
+    await ctx.reply(chunk);
+  }
+}
+
+// ─── Сбор уникальных исполнителей ───
+
+async function collectAssignees(
+  projects: { projectName: string; spreadsheetId: string }[]
+): Promise<string[]> {
+  const out: string[] = [];
+  for (const project of projects) {
+    try {
+      const all = await getAllTasks(project.spreadsheetId);
+      for (const t of all) if (t.assignee.trim()) out.push(t.assignee);
+    } catch (error) {
+      console.error(`[people] project ${project.projectName}:`, error);
+    }
+  }
+  return out;
+}
+
+// ─── Форматирование (как во вложении) ───
+
+function formatGrouped(
+  name: string,
+  total: number,
+  grouped: { project: string; tasks: PersonTask[] }[],
+  today: string
+): string[] {
+  const blocks: string[] = [`📋 Задачи: ${name} — всего ${total}`];
+
+  for (const { project, tasks } of grouped) {
+    let block = `\n📁 ${project}\n`;
+    for (const t of tasks) {
+      const { label, date } = statusLabel(t, today);
+      const stamp = date ? ` (${date})` : "";
+      block += `• ${label}${stamp}: ${t.task}`;
+      if (t.comment.trim()) block += ` — ${t.comment.trim()}`;
+      block += "\n";
+    }
+    blocks.push(block);
+  }
+
+  return packBlocks(blocks);
+}
+
+/** Склеивает блоки в сообщения с учётом лимита Telegram. */
+function packBlocks(blocks: string[]): string[] {
+  const chunks: string[] = [];
+  let buf = "";
+  for (const block of blocks) {
+    if (buf.length + block.length > MAX_MESSAGE && buf) {
+      chunks.push(buf.trimEnd());
+      buf = "";
+    }
+    buf += block;
+  }
+  if (buf.trim()) chunks.push(buf.trimEnd());
+  return chunks;
+}
+
+function statusLabel(t: PersonTask, today: string): { label: string; date: string } {
+  const d = t.normalizedDeadline;
+  if (!/^\d{2}\.\d{2}\.\d{4}$/.test(d)) {
+    return { label: "БЕЗ ДЕДЛАЙНА", date: t.deadline || "" };
+  }
+  return cmpDMY(d, today) < 0
+    ? { label: "ПРОСРОЧЕНО", date: d }
+    : { label: "В ПЛАНЕ", date: d };
+}
+
+// ─── Даты ───
+
+function todayDMY(): string {
+  const n = new Date();
+  const dd = String(n.getDate()).padStart(2, "0");
+  const mm = String(n.getMonth() + 1).padStart(2, "0");
+  return `${dd}.${mm}.${n.getFullYear()}`;
+}
+
+function sortKey(t: PersonTask): number {
+  const d = t.normalizedDeadline;
+  if (!/^\d{2}\.\d{2}\.\d{4}$/.test(d)) return Number.MAX_SAFE_INTEGER;
+  return dmyToNum(d);
+}
+
+function cmpDMY(a: string, b: string): number {
+  return dmyToNum(a) - dmyToNum(b);
+}
+
+function dmyToNum(d: string): number {
+  const [dd, mm, yyyy] = d.split(".");
+  return Number(yyyy) * 10000 + Number(mm) * 100 + Number(dd);
+}
+
+TASKS_EOF
+
+echo "-> Дописываю getAllTasks в sheets.ts..."
+
+if grep -q "getAllTasks" src/services/sheets.ts; then echo "   уже есть"; else
+
+cat >> src/services/sheets.ts <<'SHEETS_EOF'
+// ============================================================================
+//  ДОБАВИТЬ В КОНЕЦ src/services/sheets.ts
+//  (использует уже существующие в файле getClient, normalizeDate,
+//   SheetsAccessError и config — поэтому это блок для вставки, а не новый файл)
+// ============================================================================
+
+/** Полная задача из таблицы (любой дедлайн, любой статус). */
+export interface PersonTask {
+  task: string;
+  assignee: string;
+  deadline: string;            // как записано в таблице
+  normalizedDeadline: string;  // DD.MM.YYYY (или пусто/как есть, если не дата)
+  done: boolean;
+  comment: string;
+}
+
+/**
+ * Читает ВСЕ строки таблицы (без фильтра по сегодняшней дате).
+ * В отличие от getTodayTasks возвращает полный набор задач для последующей
+ * фильтрации по исполнителю. Пустые строки (без текста задачи) отбрасываются.
+ */
+export async function getAllTasks(spreadsheetId: string): Promise<PersonTask[]> {
+  const client = getClient();
+
+  try {
+    const res = await client.spreadsheets.values.get({
+      spreadsheetId,
+      range: "A2:E", // пропускаем строку заголовков
+    });
+
+    const rows = res.data.values ?? [];
+
+    return rows
+      .map((row): PersonTask => {
+        const status = row[3];
+        const done =
+          status === true || status === "TRUE" || status === "Выполнено";
+        const rawDeadline = (row[2] ?? "").toString().trim();
+        return {
+          task: (row[0] ?? "").toString(),
+          assignee: (row[1] ?? "").toString(),
+          deadline: rawDeadline,
+          normalizedDeadline: normalizeDate(rawDeadline),
+          done,
+          comment: (row[4] ?? "").toString(),
+        };
+      })
+      .filter((t) => t.task.trim().length > 0);
+  } catch (error: any) {
+    if (error?.code === 403 || error?.status === 403) {
+      throw new SheetsAccessError(config.google.serviceAccountEmail);
+    }
+    throw error;
+  }
+}
+
+SHEETS_EOF
+fi
+
+echo "-> Дописываю extractJsonFromClaude в gemini.ts..."
+
+if grep -q "extractJsonFromClaude" src/services/gemini.ts; then echo "   уже есть"; else
+
+cat >> src/services/gemini.ts <<'GEMINI_EOF'
+// ============================================================================
+//  ДОБАВИТЬ В src/services/gemini.ts
+//  (нужно только если используете опциональный resolveAliasesWithClaude
+//   из people.ts; использует приватную callClaude, поэтому живёт здесь)
+// ============================================================================
+
+/**
+ * Универсальный JSON-вызов Claude: системный промт + парсинг JSON-ответа.
+ * Снимает markdown-обёртки так же, как parseTasksJson.
+ */
+export async function extractJsonFromClaude<T>(systemPrompt: string): Promise<T> {
+  const raw = await callClaude(systemPrompt, "Верни только JSON.");
+  const cleaned = raw
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+  return JSON.parse(cleaned) as T;
+}
+
+GEMINI_EOF
+fi
+
+echo "-> Правлю commands.ts..."
+if grep -q "invalidateClusters" src/bot/handlers/commands.ts; then
+  echo "   уже есть"
+else
+  perl -0pi -e 's/(import \{ Composer \} from "grammy";)/$1\nimport { invalidateClusters } from "..\/..\/services\/person-resolver";/' src/bot/handlers/commands.ts
+  perl -0pi -e 's/(await addProject\([^;]*\);\s*\n)(\s*await ctx\.reply\(`\xe2\x9c\x85 \xd0\x9f\xd1\x80\xd0\xbe\xd0\xb5\xd0\xba\xd1\x82)/${1}    invalidateClusters(String(telegramId));\n${2}/' src/bot/handlers/commands.ts
+  if grep -q "invalidateClusters(String(telegramId))" src/bot/handlers/commands.ts; then
+    echo "   ок"
+  else
+    echo "   !! не смог авто-вставить после addProject — добавь строку invalidateClusters(String(telegramId)); после await addProject(...) вручную"
+  fi
+fi
+
+echo "-> Подключаю tasksHandlers в index.ts..."
+IDX=src/index.ts; [ -f "$IDX" ] || IDX=index.ts
+if grep -q "tasksHandlers" "$IDX"; then
+  echo "   уже есть"
+else
+  perl -0pi -e 's/(import \{ commandHandlers \} from "\.\/bot\/handlers\/commands";)/$1\nimport { tasksHandlers } from ".\/bot\/handlers\/tasks";/' "$IDX"
+  perl -0pi -e 's/(bot\.use\(commandHandlers\);\s*\n)/${1}  bot.use(tasksHandlers);\n/' "$IDX"
+  if grep -q "bot.use(tasksHandlers)" "$IDX"; then echo "   ок"; else echo "   !! добавь bot.use(tasksHandlers); между commandHandlers и flowHandlers вручную"; fi
+fi
+
+echo ""
+echo "Готово. Дальше: npx tsc --noEmit  (проверка), затем git add/commit/push."

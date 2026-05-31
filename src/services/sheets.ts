@@ -256,3 +256,59 @@ export class SheetsAccessError extends Error {
     this.name = "SheetsAccessError";
   }
 }
+// ============================================================================
+//  ДОБАВИТЬ В КОНЕЦ src/services/sheets.ts
+//  (использует уже существующие в файле getClient, normalizeDate,
+//   SheetsAccessError и config — поэтому это блок для вставки, а не новый файл)
+// ============================================================================
+
+/** Полная задача из таблицы (любой дедлайн, любой статус). */
+export interface PersonTask {
+  task: string;
+  assignee: string;
+  deadline: string;            // как записано в таблице
+  normalizedDeadline: string;  // DD.MM.YYYY (или пусто/как есть, если не дата)
+  done: boolean;
+  comment: string;
+}
+
+/**
+ * Читает ВСЕ строки таблицы (без фильтра по сегодняшней дате).
+ * В отличие от getTodayTasks возвращает полный набор задач для последующей
+ * фильтрации по исполнителю. Пустые строки (без текста задачи) отбрасываются.
+ */
+export async function getAllTasks(spreadsheetId: string): Promise<PersonTask[]> {
+  const client = getClient();
+
+  try {
+    const res = await client.spreadsheets.values.get({
+      spreadsheetId,
+      range: "A2:E", // пропускаем строку заголовков
+    });
+
+    const rows = res.data.values ?? [];
+
+    return rows
+      .map((row): PersonTask => {
+        const status = row[3];
+        const done =
+          status === true || status === "TRUE" || status === "Выполнено";
+        const rawDeadline = (row[2] ?? "").toString().trim();
+        return {
+          task: (row[0] ?? "").toString(),
+          assignee: (row[1] ?? "").toString(),
+          deadline: rawDeadline,
+          normalizedDeadline: normalizeDate(rawDeadline),
+          done,
+          comment: (row[4] ?? "").toString(),
+        };
+      })
+      .filter((t) => t.task.trim().length > 0);
+  } catch (error: any) {
+    if (error?.code === 403 || error?.status === 403) {
+      throw new SheetsAccessError(config.google.serviceAccountEmail);
+    }
+    throw error;
+  }
+}
+

@@ -173,3 +173,23 @@ export class GeminiTimeoutError extends Error {
     this.name = "GeminiTimeoutError";
   }
 }
+// ============================================================================
+//  ДОБАВИТЬ В src/services/gemini.ts
+//  (нужно только если используете опциональный resolveAliasesWithClaude
+//   из people.ts; использует приватную callClaude, поэтому живёт здесь)
+// ============================================================================
+
+/**
+ * Универсальный JSON-вызов Claude: системный промт + парсинг JSON-ответа.
+ * Снимает markdown-обёртки так же, как parseTasksJson.
+ */
+export async function extractJsonFromClaude<T>(systemPrompt: string): Promise<T> {
+  const raw = await callClaude(systemPrompt, "Верни только JSON.");
+  const cleaned = raw
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+  return JSON.parse(cleaned) as T;
+}
+
