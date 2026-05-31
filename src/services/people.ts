@@ -42,8 +42,9 @@ function canonToken(t: string): string {
 
 function tokenize(raw: string): string[] {
   const cleaned = raw.replace(/\(.*?\)/g, " ").replace(/@/g, " ");
+  // Делим в т.ч. по точке: формат "alexandr.nikolaev" → [alexandr, nikolaev].
   return cleaned
-    .split(/[\s,;/]+/)
+    .split(/[\s,;/.]+/)
     .map(canonToken)
     .filter((t) => t.length > 0);
 }
