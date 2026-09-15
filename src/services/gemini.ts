@@ -69,7 +69,7 @@ export async function extractTasksFromMom(momText: string): Promise<GeminiTask[]
 
 async function callClaude(systemPrompt: string, userMessage: string): Promise<string> {
   const body = {
-    model: "claude-sonnet-4-6",
+    model: "claude-fable-5-1",
     max_tokens: 4096,
     system: systemPrompt,
     messages: [{ role: "user", content: userMessage }],
