@@ -17,6 +17,21 @@ import { exportTasksToSheet, SheetsAccessError } from "../../services/sheets";
 import { projectSelectKeyboard, reviewKeyboard } from "../keyboards";
 
 export const flowHandlers = new Composer<BotContext>();
+const TG_LIMIT = 4000;
+
+function splitText(text: string, max = TG_LIMIT): string[] {
+  const chunks: string[] = [];
+  let rest = text;
+  while (rest.length > max) {
+    let cut = rest.lastIndexOf("\n", max);
+    if (cut < max / 2) cut = rest.lastIndexOf(" ", max);
+    if (cut < max / 2) cut = max;
+    chunks.push(rest.slice(0, cut));
+    rest = rest.slice(cut).replace(/^\s+/, "");
+  }
+  if (rest.length) chunks.push(rest);
+  return chunks;
+}
 
 // ─── 1. PDF Upload ───
 
@@ -78,9 +93,15 @@ flowHandlers.callbackQuery(/^select_project:(.+)$/, async (ctx) => {
     await createSession(telegramId, projectId, momText);
 
     // Send MoM for review (plain text, not parsed)
-    await ctx.editMessageText(momText, {
-      reply_markup: reviewKeyboard(),
-    });
+        const parts = splitText(momText);
+    await ctx.editMessageText(
+      parts[0],
+      parts.length === 1 ? { reply_markup: reviewKeyboard() } : undefined
+    );
+    for (let i = 1; i < parts.length; i++) {
+      const isLast = i === parts.length - 1;
+      await ctx.reply(parts[i], isLast ? { reply_markup: reviewKeyboard() } : undefined);
+    }
 
     await ctx.reply("Если нужны правки — просто отправь мне исправленный текст ответным сообщением.");
   } catch (error) {
@@ -146,9 +167,11 @@ flowHandlers.on("message:text", async (ctx) => {
   const editedText = ctx.message.text;
   await updateSessionDraft(session.id, editedText);
 
-  await ctx.reply("✅ Правки приняты. Вот обновлённый вариант:\n\n" + editedText, {
-    reply_markup: reviewKeyboard(),
-  });
+    const parts = splitText("Правки приняты. Вот обновлённый вариант:\n\n" + editedText);
+  for (let i = 0; i < parts.length; i++) {
+    const isLast = i === parts.length - 1;
+    await ctx.reply(parts[i], isLast ? { reply_markup: reviewKeyboard() } : undefined);
+  }
 });
 
 // ─── 4. Export to Google Sheets ───
