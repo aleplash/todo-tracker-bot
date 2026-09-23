@@ -5,6 +5,7 @@ import { commandHandlers } from "./bot/handlers/commands";
 import { tasksHandlers } from "./bot/handlers/tasks";
 import { flowHandlers } from "./bot/handlers/flow";
 import { startDigestJob } from "./jobs/digest";
+import { MODEL, TIMEOUT_MS } from "./services/gemini";
 import { createServer } from "http";
 
 async function main() {
@@ -34,7 +35,10 @@ async function main() {
     { command: "settings", description: "Настройка времени дайджеста" },
     { command: "digest", description: "Дайджест задач на сегодня" },
     { command: "add_task", description: "Добавить задачи вручную" },
+    { command: "tasks", description: "Задачи на человека: /tasks Имя Фамилия" },
+    { command: "diag", description: "Диагностика: API, таблицы, окружение" },
   ]);
+  console.log(`[boot] node ${process.version}, TZ=${process.env.TZ ?? "unset"}, LLM=${MODEL}, timeout=${TIMEOUT_MS}ms`);
   console.log("🤖 Bot starting...");
   await bot.start();
 }

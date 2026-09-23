@@ -12,6 +12,7 @@ import {
   generateMom,
   extractTasksFromMom,
   GeminiTimeoutError,
+  ClaudeApiError,
 } from "../../services/gemini";
 import { exportTasksToSheet, SheetsAccessError } from "../../services/sheets";
 import { projectSelectKeyboard, reviewKeyboard } from "../keyboards";
@@ -84,9 +85,11 @@ flowHandlers.callbackQuery(/^select_project:(.+)$/, async (ctx) => {
   try {
     const buffer = Buffer.from(pdfBytes);
     const text = await extractTextFromPdf(buffer);
+    console.log(`[flow] pdf "${fileName}": ${buffer.length} bytes → ${text.length} chars text`);
 
     // Step 1: Generate human-readable MoM with user's prompt
     const momText = await generateMom(text, fileName);
+    console.log(`[flow] MoM generated: ${momText.length} chars`);
 
     // Save MoM in session for later export
     const telegramId = BigInt(ctx.from!.id);
@@ -105,12 +108,14 @@ flowHandlers.callbackQuery(/^select_project:(.+)$/, async (ctx) => {
 
     await ctx.reply("Если нужны правки — просто отправь мне исправленный текст ответным сообщением.");
   } catch (error) {
-    if (error instanceof PdfNoTextError) {
-      await ctx.editMessageText(error.message);
-    } else if (error instanceof GeminiTimeoutError) {
+    console.error("[flow] select_project failed:", error);
+    if (
+      error instanceof PdfNoTextError ||
+      error instanceof GeminiTimeoutError ||
+      error instanceof ClaudeApiError
+    ) {
       await ctx.editMessageText(error.message);
     } else {
-      console.error("Flow error:", error);
       await ctx.editMessageText("❌ Произошла ошибка при обработке документа. Попробуйте ещё раз.");
     }
   }
@@ -154,8 +159,16 @@ flowHandlers.on("message:text", async (ctx) => {
       const count = await exportTasksToSheet(project.spreadsheetId, tasks);
       await ctx.reply(`✅ ${count} задач(и) успешно добавлены в таблицу проекта "${project.projectName}".`);
     } catch (error) {
-      console.error("Manual task error:", error);
-      await ctx.reply("❌ Не удалось извлечь задачи. Проверьте формат и попробуйте ещё раз.");
+      console.error("[flow] manual task failed:", error);
+      if (
+        error instanceof SheetsAccessError ||
+        error instanceof ClaudeApiError ||
+        error instanceof GeminiTimeoutError
+      ) {
+        await ctx.reply(error.message);
+      } else {
+        await ctx.reply("❌ Не удалось извлечь задачи. Проверьте формат и попробуйте ещё раз.");
+      }
     }
     return;
   }
@@ -203,12 +216,12 @@ flowHandlers.callbackQuery("export_tasks", async (ctx) => {
     await updateSessionStatus(session.id, "exported");
     await ctx.reply(`✅ ${count} задач(и) успешно добавлены в таблицу проекта "${session.project.projectName}".`);
   } catch (error) {
-    if (error instanceof SheetsAccessError) {
+    console.error("[flow] export_tasks failed:", error);
+    if (error instanceof SheetsAccessError || error instanceof ClaudeApiError) {
       await ctx.reply(error.message);
     } else if (error instanceof GeminiTimeoutError) {
       await ctx.reply("❌ Не удалось извлечь задачи. " + error.message);
     } else {
-      console.error("Export error:", error);
       await ctx.reply("❌ Ошибка при экспорте. Попробуйте ещё раз.");
     }
   }

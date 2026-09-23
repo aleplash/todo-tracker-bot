@@ -8,6 +8,8 @@ import {
   updateNotifyTime,
 } from "../../db";
 import { extractSpreadsheetId, validateSheetAccess, getTodayTasks } from "../../services/sheets";
+import { pingClaude, MODEL, TIMEOUT_MS } from "../../services/gemini";
+import { config } from "../../config";
 import { projectSelectKeyboardManual } from "../keyboards";
 
 export const commandHandlers = new Composer<BotContext>();
@@ -93,6 +95,45 @@ commandHandlers.command("digest", async (ctx) => {
   for (const chunk of chunks) {
     await ctx.reply(chunk, { parse_mode: "Markdown" });
   }
+});
+
+// ─── /diag — проверка окружения и доступности API ───
+
+commandHandlers.command("diag", async (ctx) => {
+  const telegramId = BigInt(ctx.from!.id);
+  const sent = await ctx.reply("🩺 Проверяю окружение и API…");
+
+  const lines: string[] = [
+    `Node ${process.version}, uptime ${Math.round(process.uptime())} с`,
+    `TZ сервера: ${process.env.TZ ?? "не задана"} (сейчас ${new Date().toTimeString().slice(0, 5)})`,
+    `LLM: ${MODEL}, таймаут ${TIMEOUT_MS / 1000} с`,
+    `Ключ API: ${config.anthropicApiKey ? `задан (…${config.anthropicApiKey.slice(-4)})` : "НЕТ"}`,
+    `Сервисный email Sheets: ${config.google.serviceAccountEmail}`,
+    "",
+  ];
+
+  const ping = await pingClaude();
+  lines.push(
+    ping.ok
+      ? `✅ Claude API отвечает за ${ping.ms} мс`
+      : `❌ Claude API: ${ping.status ? `HTTP ${ping.status}, ` : ""}${ping.detail} (${ping.ms} мс)`
+  );
+
+  const projects = await getUserProjects(telegramId);
+  if (projects.length > 0) {
+    const p = projects[0];
+    try {
+      await validateSheetAccess(p.spreadsheetId);
+      lines.push(`✅ Google Sheets: доступ к таблице "${p.projectName}" есть`);
+    } catch (error: any) {
+      lines.push(`❌ Google Sheets ("${p.projectName}"): ${error?.message ?? error}`);
+    }
+  } else {
+    lines.push("ℹ️ Проектов нет — проверку Sheets пропускаю");
+  }
+
+  console.log("[diag]", lines.join(" | "));
+  await ctx.api.editMessageText(sent.chat.id, sent.message_id, lines.join("\n"));
 });
 
 // ─── /add_task ───
