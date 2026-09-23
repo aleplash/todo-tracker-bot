@@ -1,3 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# apply_short_mom.sh — запускать из КОРНЯ репозитория todo-tracker-bot:
+#   bash apply_short_mom.sh
+if [ ! -d src ] || [ ! -f package.json ]; then
+  echo "Нет src/ или package.json. Запусти из корня репозитория."; exit 1
+fi
+echo "-> Записываю файлы..."
+mkdir -p "src/services"
+cat > "src/services/gemini.ts" <<'EOF_src_services_gemini_ts_'
 import { config } from "../config";
 import type { GeminiTask } from "../types";
 
@@ -328,3 +338,22 @@ export async function extractJsonFromClaude<T>(systemPrompt: string): Promise<T>
   return JSON.parse(cleaned) as T;
 }
 
+EOF_src_services_gemini_ts_
+echo "   ok  src/services/gemini.ts"
+mkdir -p "."
+cat > ".env.example" <<'EOF__env_example_'
+DATABASE_URL=postgresql://user:password@localhost:5432/todo_tracker
+TELEGRAM_BOT_TOKEN=your-telegram-bot-token
+ANTHROPIC_API_KEY=sk-ant-...
+# base64 от всего содержимого PEM-ключа сервисного аккаунта (включая BEGIN/END строки)
+GOOGLE_PRIVATE_KEY_BASE64=
+GOOGLE_SERVICE_ACCOUNT_EMAIL=your-service-account@project.iam.gserviceaccount.com
+# необязательные
+# LLM_MODEL=claude-fable-5-1
+# LLM_TIMEOUT_MS=300000
+# LLM_MAX_TOKENS=16384
+# TZ=Europe/Nicosia
+EOF__env_example_
+echo "   ok  .env.example"
+echo "-> Проверка типов..."
+npx tsc --noEmit && echo "Готово. Дальше: git add -A && git commit -m \"short_mom\" && git push"
