@@ -1,3 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# apply_fix_conflict.sh — запускать из КОРНЯ репозитория todo-tracker-bot:
+#   bash apply_fix_conflict.sh
+if [ ! -d src ] || [ ! -f package.json ]; then
+  echo "Нет src/ или package.json. Запусти из корня репозитория."; exit 1
+fi
+echo "-> Записываю файлы..."
+mkdir -p "src/services"
+cat > "src/services/gemini.ts" <<'EOF_src_services_gemini_ts_'
 import { config } from "../config";
 import type { GeminiTask } from "../types";
 
@@ -282,3 +292,7 @@ export async function extractJsonFromClaude<T>(systemPrompt: string): Promise<T>
   return JSON.parse(cleaned) as T;
 }
 
+EOF_src_services_gemini_ts_
+echo "   ok  src/services/gemini.ts"
+echo "-> Проверка типов..."
+npx tsc --noEmit && echo "Готово. Дальше: git add -A && git commit -m \"fix_conflict\" && git push"
